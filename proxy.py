@@ -5,10 +5,35 @@
 import socket
 import threading
 import argparse
+import signal
+import sys
+
+# Global variable for the proxy socket and shutdown flag
+proxy_socket = None
+shutting_down = False
+
+
+def handle_exit(signal_received, frame):
+    """
+    Handles the exit signal of the program.
+    Closes the proxy socket and terminates the program gracefully.
+    """
+    global proxy_socket, shutting_down
+
+    if shutting_down:  # Prevent duplicate handling
+        return
+
+    shutting_down = True  # Signal all threads to stop
+    print("\nShutting down proxy...")
+    if proxy_socket:
+        proxy_socket.close()  # Close the proxy socket if it's open
+    sys.exit(0)  # Exit the program gracefully
 
 
 def main():
-    # For command line
+    global proxy_socket
+
+    # For command line arguments
     parser = argparse.ArgumentParser(description="Simple TCP Proxy")
     parser.add_argument("--ip", required=True, help="IP address to listen on")
     parser.add_argument("--port", required=True, type=int, help="Port to listen on")
@@ -32,7 +57,11 @@ def main():
     proxy_socket.bind((listen_ip, listen_port))
     proxy_socket.listen(5)  # Maximum 5 connections at a time
 
-    print(f"Listening: {listen_ip}:{listen_port} and forwarding to {target_host}:{target_port}...")
+    print(f"Listening: {listen_ip}:{listen_port} and forwarding to {target_host}:{target_port}")
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, handle_exit)  # Handle Ctrl+C
+    signal.signal(signal.SIGTERM, handle_exit)  # Handle termination signals
 
     try:
         while True:
@@ -47,11 +76,10 @@ def main():
                 args=(client_socket, target_host, target_port)
             )
             client_handler.start()
-
-    except KeyboardInterrupt:
-        print("\nProxy shutting down...")
     finally:
-        proxy_socket.close()
+        if not shutting_down:  # Only run if the signal handler hasn’t already done cleanup!!!
+            print("\nProxy socket closed. Exiting...")
+            proxy_socket.close()
 
 
 def handle_client(client_socket, target_host, target_port):
@@ -69,8 +97,9 @@ def handle_client(client_socket, target_host, target_port):
         client_to_server.start()
         server_to_client.start()
 
-        client_to_server.join()
-        server_to_client.join()
+        # Wait for threads to finish
+        client_to_server.join(timeout=1)
+        server_to_client.join(timeout=1)
 
     except Exception as e:
         print(f"Error: {e}")
@@ -81,11 +110,16 @@ def handle_client(client_socket, target_host, target_port):
 
 # Forwarding data between client and server
 def forward_data(src, dest):
-    while True:
-        data = src.recv(4096)
-        if not data:
-            break
-        dest.send(data)  # Forwarding the data
+    global shutting_down
+
+    while not shutting_down:  # Stop if the proxy is shutting down
+        try:
+            data = src.recv(4096)
+            if not data:
+                break
+            dest.send(data)  # Forward the data
+        except socket.error:
+            break  # Handle socket errors
 
 
 if __name__ == "__main__":
