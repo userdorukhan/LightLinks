@@ -1,7 +1,3 @@
-"""
-@author Dorukhan User
-"""
-
 import os
 import socket
 import threading
@@ -12,8 +8,26 @@ import logging
 from datetime import datetime
 from collections import Counter
 
+# Configure module-level logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Add a console handler
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+logger.addHandler(console_handler)
+
+# Add a file handler for general logs
+if not os.path.exists('logs'):
+    os.makedirs('logs')
+file_handler = logging.FileHandler('logs/proxy.log')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(console_formatter)
+logger.addHandler(file_handler)
+
 # Global variables
-proxy_socket = None
 shutting_down = False
 url_counter = Counter()
 url_counter_lock = threading.Lock()
@@ -25,53 +39,48 @@ def handle_exit(signal_received, frame):
     Closes the proxy socket, waits for all threads to terminate,
     and logs the total usage statistics.
     """
-    global proxy_socket, shutting_down
+    global shutting_down
 
     if shutting_down:  # Prevent duplicate handling
         return
 
     shutting_down = True  # Signal all threads to stop
-    print("\nShutting down proxy...")
+    logger.info("Shutting down proxy...")
 
-    # Don't accept new connections so closing the socket
-    if proxy_socket:
-        proxy_socket.close()
+    # Output top accessed URLs
+    try:
+        logger.info("Top Accessed URLs:")
+        with url_counter_lock:
+            if len(url_counter) == 0:
+                logger.info("No URLs accessed during this session.")
+            else:
+                top_urls = url_counter.most_common(10)
+                for url, count in top_urls:
+                    logger.info(f"{url}: {count} times")
+
+                # Write to a separate log file
+                with open('logs/top_urls.log', 'w') as f:
+                    f.write("Top Accessed URLs:\n")
+                    for url, count in top_urls:
+                        f.write(f"{url}: {count} times\n")
+                logger.info("Top URLs written to logs/top_urls.log")
+    except Exception as e:
+        logger.error(f"Error while writing usage logs: {e}")
 
     # Wait for threads to finish
     for thread in threading.enumerate():
         if thread != threading.main_thread():
             thread.join()
 
-    # Output top accessed URLs
-    try:
-        print("\nTop Accessed URLs:")
-        with url_counter_lock:
-            if len(url_counter) == 0:
-                print("No URLs accessed during this session.")
-            else:
-                # Sort URLs by count
-                top_urls = url_counter.most_common(10)
-
-                # Print top accessed URLs to the console
-                for url, count in top_urls:
-                    print(f"{url}: {count} times")
-
-                # Write top accessed URLs to a log file
-                log_path = 'logs/top_urls.log'
-                with open(log_path, 'w') as f:
-                    f.write("Top Accessed URLs:\n")
-                    for url, count in top_urls:
-                        f.write(f"{url}: {count} times\n")
-                print(f"Top URLs written to {log_path}")
-    except Exception as e:
-        print(f"Error while writing usage logs: {e}")
+    # Notify user of successful shutdown
+    logger.info("Proxy closed successfully.")
+    print("Proxy closed.")  # Friendly message
     sys.exit(0)
 
 
 def main():
-    global proxy_socket
+    global shutting_down
 
-    # For command line arguments
     parser = argparse.ArgumentParser(description="Simple TCP Proxy")
     parser.add_argument("--ip", required=True, help="IP address to listen on")
     parser.add_argument("--port", required=True, type=int, help="Port to listen on")
@@ -82,75 +91,55 @@ def main():
     listen_port = args.port
     target_server = args.server
 
-    # Ensure the logs directory exists
-    if not os.path.exists('logs'):
-        os.makedirs('logs')
-
-    # Target Server Details
     try:
         target_host, target_port = target_server.split(":")
         target_port = int(target_port)
     except ValueError:
-        print("Error: Target server format must be 'ip:port'")
+        logger.error("Target server format must be 'ip:port'")
         return
 
-    # The proxy server socket
+    # Set up the proxy server socket
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy_socket.bind((listen_ip, listen_port))
-    proxy_socket.listen(5)  # Maximum 5 connections at a time
-
-    print(f"Listening: {listen_ip}:{listen_port} and forwarding to {target_host}:{target_port}")
+    proxy_socket.listen(5)
+    logger.info(f"Proxy listening on {listen_ip}:{listen_port} and forwarding to {target_host}:{target_port}")
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, handle_exit)  # Handle Ctrl+C
     signal.signal(signal.SIGTERM, handle_exit)  # Handle termination signals
 
-    while True:
+    while not shutting_down:
         try:
             client_socket, addr = proxy_socket.accept()
-            print(f"Connection received from client IP: {addr[0]}, Port: {addr[1]}")
-
-            # Thread to handle the client connection
+            logger.info(f"Connection received from client {addr[0]}:{addr[1]}")
             client_handler = threading.Thread(
                 target=handle_client,
                 args=(client_socket, target_host, target_port, addr)
             )
             client_handler.start()
         except Exception as e:
-            print(f"Error: {e}")
+            logger.exception("Error accepting connections")
             break
 
 
 def handle_client(client_socket, target_host, target_port, client_address):
     """
-    Handling communication between the client and the target server.
+    Handles communication between the client and the target server.
     """
     client_ip, client_port = client_address
+    server_socket = None  # Initialize to ensure proper cleanup
     try:
-        # Create a logger for this session
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_filename = f'logs/session_{timestamp}_{client_ip}_{client_port}.log'
-        logger = logging.getLogger(f'session_{client_ip}_{client_port}')
-        logger.setLevel(logging.INFO)
-        fh = logging.FileHandler(log_filename)
-        formatter = logging.Formatter('%(asctime)s - %(message)s')
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
-
-        # Log session start
         logger.info(f"Session started for {client_ip}:{client_port}")
-
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect((target_host, target_port))
 
-        # Start threads to forward data in both directions
         client_to_server = threading.Thread(
             target=forward_data,
-            args=(client_socket, server_socket, logger, 'Request', client_ip, client_port)
+            args=(client_socket, server_socket, 'Request', client_ip, client_port)
         )
         server_to_client = threading.Thread(
             target=forward_data,
-            args=(server_socket, client_socket, logger, 'Response', client_ip, client_port)
+            args=(server_socket, client_socket, 'Response', client_ip, client_port)
         )
 
         client_to_server.start()
@@ -159,68 +148,63 @@ def handle_client(client_socket, target_host, target_port, client_address):
         client_to_server.join()
         server_to_client.join()
 
-        try:
-            client_socket.shutdown(socket.SHUT_RDWR)
-            client_socket.close()
-        except socket.error:
-            pass
-        try:
-            server_socket.shutdown(socket.SHUT_RDWR)
-            server_socket.close()
-        except socket.error:
-            pass
-
-        # Log session end
-        logger.info(f"Session ended for {client_ip}:{client_port}")
-        logger.removeHandler(fh)
-        fh.close()
-
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception(f"Error handling client {client_ip}:{client_port}")
+    finally:
+        # Safely close client and server sockets
+        try:
+            if client_socket:
+                client_socket.shutdown(socket.SHUT_RDWR)
+                client_socket.close()
+        except OSError as e:
+            logger.debug(f"Client socket already closed: {e}")
+
+        try:
+            if server_socket:
+                server_socket.shutdown(socket.SHUT_RDWR)
+                server_socket.close()
+        except OSError as e:
+            logger.debug(f"Server socket already closed: {e}")
+
+        logger.info(f"Session ended for {client_ip}:{client_port}")
 
 
-def forward_data(src, dest, logger, direction, client_ip, client_port):
-    global shutting_down
-
-    src.settimeout(1.0)
+def forward_data(src, dest, direction, client_ip, client_port):
+    """
+    Forwards data between the source and destination sockets.
+    Logs HTTP requests/responses and updates URL counters for requests.
+    """
+    src.settimeout(1.0)  # Set a timeout for the source socket
 
     while not shutting_down:
         try:
-            # Read data from source
             data = src.recv(4096)
             if not data:
                 break
 
-            # Log HTTP data
-            if b"HTTP" in data:
+            if direction == 'Request' and b"HTTP" in data:
                 lines = data.decode(errors='ignore').splitlines()
-                if lines:
-                    if direction == 'Request':
-                        request_line = lines[0]
-                        logger.info(f"{direction} from {client_ip}:{client_port} - {request_line}")
-                        # Track URL
-                        try:
-                            method, url, _ = request_line.split()
-                            with url_counter_lock:
-                                url_counter[url] += 1
-                        except Exception as e:
-                            logger.error(f"Failed to parse request line: {e}")
-                    elif direction == 'Response':
-                        status_line = lines[0]
-                        logger.info(f"{direction} to {client_ip}:{client_port} - {status_line}")
+                request_line = lines[0]
+                logger.info(f"{direction} from {client_ip}:{client_port} - {request_line}")
+                try:
+                    method, url, _ = request_line.split()
+                    with url_counter_lock:
+                        url_counter[url] += 1
+                except ValueError:
+                    logger.error(f"Failed to parse request line: {request_line}")
+            elif direction == 'Response' and b"HTTP" in data:
+                logger.debug(f"{direction} to {client_ip}:{client_port} - {data[:50].decode(errors='ignore')}...")
 
-            # Send data to destination
             dest.sendall(data)
         except socket.timeout:
-            # Timeout occurred, check if shutting down
             continue
-        except (socket.error, OSError) as e:
+        except socket.error as e:
             if shutting_down:
                 break
             logger.error(f"Socket error: {e}")
             break
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.exception("Unexpected error in forward_data")
             break
 
 
