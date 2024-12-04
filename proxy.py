@@ -22,7 +22,8 @@ url_counter_lock = threading.Lock()
 def handle_exit(signal_received, frame):
     """
     Handles the exit signal of the program.
-    Closes the proxy socket and terminates the program gracefully.
+    Closes the proxy socket, waits for all threads to terminate,
+    and logs the total usage statistics.
     """
     global proxy_socket, shutting_down
 
@@ -32,21 +33,39 @@ def handle_exit(signal_received, frame):
     shutting_down = True  # Signal all threads to stop
     print("\nShutting down proxy...")
 
-    # Output top accessed URLs
-    print("\nTop Accessed URLs:")
-    with url_counter_lock:
-        for url, count in url_counter.most_common(10):
-            print(f"{url}: {count} times")
-
-        # Write to a log file
-        with open('logs/top_urls.log', 'w') as f:
-            f.write("Top Accessed URLs:\n")
-            for url, count in url_counter.most_common(10):
-                f.write(f"{url}: {count} times\n")
-
+    # Don't accept new connections so closing the socket
     if proxy_socket:
-        proxy_socket.close()  # Close the proxy socket if it's open
-    sys.exit(0)  # Exit the program gracefully
+        proxy_socket.close()
+
+    # Wait for threads to finish
+    for thread in threading.enumerate():
+        if thread != threading.main_thread():
+            thread.join()
+
+    # Output top accessed URLs
+    try:
+        print("\nTop Accessed URLs:")
+        with url_counter_lock:
+            if len(url_counter) == 0:
+                print("No URLs accessed during this session.")
+            else:
+                # Sort URLs by count
+                top_urls = url_counter.most_common(10)
+
+                # Print top accessed URLs to the console
+                for url, count in top_urls:
+                    print(f"{url}: {count} times")
+
+                # Write top accessed URLs to a log file
+                log_path = 'logs/top_urls.log'
+                with open(log_path, 'w') as f:
+                    f.write("Top Accessed URLs:\n")
+                    for url, count in top_urls:
+                        f.write(f"{url}: {count} times\n")
+                print(f"Top URLs written to {log_path}")
+    except Exception as e:
+        print(f"Error while writing usage logs: {e}")
+    sys.exit(0)
 
 
 def main():
@@ -113,7 +132,6 @@ def handle_client(client_socket, target_host, target_port, client_address):
         log_filename = f'logs/session_{timestamp}_{client_ip}_{client_port}.log'
         logger = logging.getLogger(f'session_{client_ip}_{client_port}')
         logger.setLevel(logging.INFO)
-        # Create file handler for the logger
         fh = logging.FileHandler(log_filename)
         formatter = logging.Formatter('%(asctime)s - %(message)s')
         fh.setFormatter(formatter)
@@ -125,7 +143,7 @@ def handle_client(client_socket, target_host, target_port, client_address):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect((target_host, target_port))
 
-        # Start threads to forward data in both directions (For Multi-Threading)
+        # Start threads to forward data in both directions
         client_to_server = threading.Thread(
             target=forward_data,
             args=(client_socket, server_socket, logger, 'Request', client_ip, client_port)
@@ -138,33 +156,34 @@ def handle_client(client_socket, target_host, target_port, client_address):
         client_to_server.start()
         server_to_client.start()
 
-        # Wait for threads to finish
-        client_to_server.join(timeout=1)
-        server_to_client.join(timeout=1)
+        client_to_server.join()
+        server_to_client.join()
+
+        try:
+            client_socket.shutdown(socket.SHUT_RDWR)
+            client_socket.close()
+        except socket.error:
+            pass
+        try:
+            server_socket.shutdown(socket.SHUT_RDWR)
+            server_socket.close()
+        except socket.error:
+            pass
 
         # Log session end
         logger.info(f"Session ended for {client_ip}:{client_port}")
-
-        # Remove handlers to prevent duplicate logs
         logger.removeHandler(fh)
         fh.close()
 
     except Exception as e:
         print(f"Error: {e}")
-    finally:
-        # Safely close sockets if not already closed
-        try:
-            client_socket.close()
-        except socket.error:
-            pass
-        try:
-            server_socket.close()
-        except socket.error:
-            pass
 
 
 def forward_data(src, dest, logger, direction, client_ip, client_port):
     global shutting_down
+
+    src.settimeout(1.0)
+
     while not shutting_down:
         try:
             # Read data from source
@@ -179,7 +198,7 @@ def forward_data(src, dest, logger, direction, client_ip, client_port):
                     if direction == 'Request':
                         request_line = lines[0]
                         logger.info(f"{direction} from {client_ip}:{client_port} - {request_line}")
-                        # Extract the URL and update the global URL counter
+                        # Track URL
                         try:
                             method, url, _ = request_line.split()
                             with url_counter_lock:
@@ -187,12 +206,14 @@ def forward_data(src, dest, logger, direction, client_ip, client_port):
                         except Exception as e:
                             logger.error(f"Failed to parse request line: {e}")
                     elif direction == 'Response':
-                        # Log the HTTP response status
                         status_line = lines[0]
                         logger.info(f"{direction} to {client_ip}:{client_port} - {status_line}")
 
             # Send data to destination
-            dest.send(data)
+            dest.sendall(data)
+        except socket.timeout:
+            # Timeout occurred, check if shutting down
+            continue
         except (socket.error, OSError) as e:
             if shutting_down:
                 break
