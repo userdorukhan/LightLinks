@@ -37,51 +37,6 @@ url_counter = Counter()
 url_counter_lock = threading.Lock()
 
 
-def handle_exit(signal_received, frame):
-    """
-    Handles the exit signal of the program.
-    Closes the proxy socket, waits for all threads to terminate,
-    and logs the total usage statistics.
-    """
-    global shutting_down
-
-    if shutting_down:  # Prevent duplicate handling
-        return
-
-    shutting_down = True  # Signal all threads to stop
-    logger.info("Shutting down proxy...")
-
-    # Output top accessed URLs
-    try:
-        logger.info("Top Accessed URLs:")
-        with url_counter_lock:
-            if len(url_counter) == 0:
-                logger.info("No URLs accessed during this session.")
-            else:
-                top_urls = url_counter.most_common(10)
-                for url, count in top_urls:
-                    logger.info(f"{url}: {count} times")
-
-                # Write to a separate log file
-                with open('logs/top_urls.log', 'w') as f:
-                    f.write("Top Accessed URLs:\n")
-                    for url, count in top_urls:
-                        f.write(f"{url}: {count} times\n")
-                    f.flush()  # Ensure all data is written
-                logger.info("Top URLs written to logs/top_urls.log")
-    except Exception as e:
-        logger.error(f"Error while writing usage logs: {e}")
-
-    # Wait for threads to finish
-    for thread in threading.enumerate():
-        if thread != threading.main_thread():
-            thread.join()
-
-    # Notify user of successful shutdown
-    logger.info("Proxy closed successfully.")
-    sys.exit(0)
-
-
 def main():
     global shutting_down
 
@@ -143,6 +98,51 @@ def main():
         except Exception as e:
             logger.exception("Error accepting connections")
             break
+
+
+def handle_exit(signal_received, frame):
+    """
+    Handles the exit signal of the program.
+    Closes the proxy socket, waits for all threads to terminate,
+    and logs the total usage statistics.
+    """
+    global shutting_down
+
+    if shutting_down:  # Prevent duplicate handling
+        return
+
+    shutting_down = True  # Signal all threads to stop
+    logger.info("Shutting down proxy...")
+
+    # Output top accessed URLs
+    try:
+        logger.info("Top Accessed URLs:")
+        with url_counter_lock:
+            if len(url_counter) == 0:
+                logger.info("No URLs accessed during this session.")
+            else:
+                top_urls = url_counter.most_common(10)
+                for url, count in top_urls:
+                    logger.info(f"{url}: {count} times")
+
+                # Write to a separate log file
+                with open('logs/top_urls.log', 'w') as f:
+                    f.write("Top Accessed URLs:\n")
+                    for url, count in top_urls:
+                        f.write(f"{url}: {count} times\n")
+                    f.flush()  # Ensure all data is written
+                logger.info("Top URLs written to logs/top_urls.log")
+    except Exception as e:
+        logger.error(f"Error while writing usage logs: {e}")
+
+    # Wait for threads to finish
+    for thread in threading.enumerate():
+        if thread != threading.main_thread():
+            thread.join()
+
+    # Notify user of successful shutdown
+    logger.info("Proxy closed successfully.")
+    sys.exit(0)
 
 
 def handle_client(client_socket, target_host, target_port, client_address, block_url, inject_header):
