@@ -1,3 +1,8 @@
+"""
+TCP Proxy Server
+@author Dorukhan User
+"""
+
 import os
 import socket
 import threading
@@ -166,7 +171,8 @@ def handle_client(client_socket, target_host, target_port, client_address, block
 
         client_to_server = threading.Thread(
             target=forward_data,
-            args=(client_socket, server_socket, 'Request', client_ip, client_port, block_url, inject_header, socket_closed_flags)
+            args=(client_socket, server_socket, 'Request', client_ip, client_port, block_url, inject_header,
+                  socket_closed_flags)
         )
         server_to_client = threading.Thread(
             target=forward_data,
