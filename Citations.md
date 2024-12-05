@@ -7,3 +7,4 @@
 - [Python Logging How-To Guide](https://docs.python.org/3.9/howto/logging.html)
 - [HTTP Protocol Overview](https://developer.mozilla.org/en-US/docs/Web/HTTP/Overview)
 - [Stack Overflow](https://stackoverflow.com/questions/tagged/tcp)
+- [ChatGPT](https://chatgpt.com/) (For test cases and debugging)
