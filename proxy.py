@@ -158,16 +158,23 @@ def handle_client(client_socket, target_host, target_port, client_address, block
             server_socket.connect((target_host, target_port))
         except socket.gaierror as e:
             logger.error(f"Failed to resolve server address {target_host}:{target_port}: {e}")
+            # Notifying the client of connection failure
             response = (
                 "HTTP/1.1 502 Bad Gateway\r\n"
                 "Content-Type: text/plain\r\n"
-                "Content-Length: 77\r\n"
+                "Content-Length: 95\r\n"  # Adjusted length to match the message
                 "\r\n"
                 "The proxy could not resolve or connect to the target server. Please check the server address.\r\n"
             ).encode()
-            client_socket.sendall(response)
-            client_socket.close()
-            socket_closed_flags['client_socket_closed'] = True
+
+            try:
+                client_socket.sendall(response)
+                client_socket.shutdown(socket.SHUT_WR)  # Properly close the write side of the socket
+            except Exception as send_error:
+                logger.error(f"Error sending response to client: {send_error}")
+            finally:
+                client_socket.close()
+                socket_closed_flags['client_socket_closed'] = True
             return
 
         client_to_server = threading.Thread(
@@ -325,7 +332,7 @@ def handle_suspend(signal_received, frame):
     Handles the SIGTSTP (CTRL+Z) signal.
     Logs the message stating it was interrupted by CTRL+Z.
     """
-    logger.info("Proxy suspended with CTRL+Z. Use 'fg' to resume or 'kill' to terminate.")
+    logger.info("Proxy suspended with CTRL+Z. Use 'fg' to resume or 'kill %1' to terminate.")
     os.kill(os.getpid(), signal.SIGSTOP)  # Suspend the process
 
 
