@@ -112,6 +112,7 @@ def main():
 
     # Set up the proxy server socket
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    proxy_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Reusing the same address (For test cases)
     proxy_socket.bind((listen_ip, listen_port))
     proxy_socket.listen(5)
 
